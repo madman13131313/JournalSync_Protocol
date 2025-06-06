@@ -1,37 +1,31 @@
 import socket
 import struct
 
-# Server IP and Port Configuration
+# Server configuration
 SERVER_ADDRESS = '127.0.0.1'
 SERVER_PORT = 44444
 
-# Operation codes for different message types
-OPCODE_UPLOAD = 1        # Upload journal entry
-OPCODE_ACK = 2           # Acknowledgement from server (not used in client directly)
-OPCODE_GET_LATEST = 3    # Request latest journal entry
+# Operation codes
+OPCODE_UPLOAD = 1
+OPCODE_ACK = 2
+OPCODE_GET_LATEST = 3
+OPCODE_LATEST_ENTRY = 4  # Server sends back the latest entry
 
 def create_upload_message(title, content):
     """
-    Packs the journal entry into a binary message according to the JournalSync protocol.
-    Header: version, opcode, payload length
-    Body: title length + title, content length + content
+    Constructs the upload message using the protocol format.
     """
     title_bytes = title.encode('utf-8')
     content_bytes = content.encode('utf-8')
-    
-    # Header: version = 1, opcode = 1 (upload), length = title + content + 4 bytes (2 for each length field)
     header = struct.pack('!HHH', 1, OPCODE_UPLOAD, len(title_bytes) + len(content_bytes) + 4)
-    
-    # Body: title length, title, content length, content
-    body = struct.pack(f'!H{len(title_bytes)}sH{len(content_bytes)}s', 
-                       len(title_bytes), title_bytes, 
+    body = struct.pack(f'!H{len(title_bytes)}sH{len(content_bytes)}s',
+                       len(title_bytes), title_bytes,
                        len(content_bytes), content_bytes)
-    
     return header + body
 
 def menu():
     """
-    Display the main menu to the user and return their choice.
+    Displays the user menu and returns their choice.
     """
     print("Choose an operation:")
     print("1 - Upload new journal entry")
@@ -39,30 +33,41 @@ def menu():
     return input("Enter 1 or 2: ")
 
 def main():
-    # Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    
-    # Prompt user for desired operation
     choice = menu()
 
-    # Build the appropriate message based on user's choice
     if choice == '1':
         title = input("Enter journal title: ")
         content = input("Enter journal content: ")
         msg = create_upload_message(title, content)
     elif choice == '2':
-        # Send just the header for GET_LATEST
+        # Empty message with header only
         msg = struct.pack('!HHH', 1, OPCODE_GET_LATEST, 0)
     else:
         print("Invalid choice")
         return
 
-    # Send message to server
     sock.sendto(msg, (SERVER_ADDRESS, SERVER_PORT))
-    
-    # Receive and display response from server
     response, _ = sock.recvfrom(2048)
-    print("Received response:\n", response.decode('utf-8', errors='ignore'))
+
+    # Decode header
+    if len(response) >= 6:
+        version, opcode, length = struct.unpack('!HHH', response[:6])
+
+        if opcode == OPCODE_ACK:
+            print("Upload acknowledged by server.")
+        elif opcode == OPCODE_LATEST_ENTRY:
+            body = response[6:]
+            title_len = struct.unpack('!H', body[:2])[0]
+            title = body[2:2+title_len].decode('utf-8')
+            offset = 2 + title_len
+            content_len = struct.unpack('!H', body[offset:offset+2])[0]
+            content = body[offset+2:offset+2+content_len].decode('utf-8')
+            print(f"Latest Entry:\nTitle: {title}\nContent: {content}")
+        else:
+            print(f"Received unknown OpCode: {opcode}")
+    else:
+        print("Received empty or malformed response.")
 
 if __name__ == '__main__':
     main()

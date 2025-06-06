@@ -1,80 +1,71 @@
 import socket
 import struct
-from datetime import datetime
+import time
 
-# Server will listen on this port
 PORT = 44444
-
-# Operation codes
-OPCODE_UPLOAD = 1        # Client sends a journal entry
-OPCODE_ACK = 2           # Server sends back acknowledgement
-OPCODE_GET_LATEST = 3    # Client requests latest journal entry
 
 def handle_upload(data):
     """
-    Handle an upload operation from the client.
-    Parses the data to extract the title and content,
-    saves it to a file with a timestamp, and returns an ACK.
+    Parses and stores a journal entry.
     """
-    # Extract title length and title
     title_len = struct.unpack('!H', data[:2])[0]
-    title = data[2:2+title_len].decode('utf-8')
-    
-    # Move to content length and content
+    title = data[2:2 + title_len].decode('utf-8')
     offset = 2 + title_len
-    content_len = struct.unpack('!H', data[offset:offset+2])[0]
-    content = data[offset+2:offset+2+content_len].decode('utf-8')
+    content_len = struct.unpack('!H', data[offset:offset + 2])[0]
+    content = data[offset + 2:offset + 2 + content_len].decode('utf-8')
 
-    # Add timestamp and save to file
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     with open('journal_entries.txt', 'a') as f:
         f.write(f'Time: {timestamp}\nTitle: {title}\nContent: {content}\n---\n')
 
-    # Return ACK message (just header with OpCode = 2)
-    return struct.pack('!HHH', 1, OPCODE_ACK, 0)
+    print(f"[{timestamp}] Received and saved journal entry: '{title}'")
+    return struct.pack('!HHH', 1, 2, 0)  # ACK
 
 def handle_get_latest():
     """
-    Reads the last journal entry from the file and returns it as a string.
+    Retrieves and returns the most recent journal entry using protocol format.
     """
     try:
         with open('journal_entries.txt', 'r') as f:
             entries = f.read().strip().split('---\n')
-            if entries and entries[-1].strip():
-                latest = entries[-1].strip()
-            elif len(entries) > 1:
-                latest = entries[-2].strip()
-            else:
-                latest = "No entries found."
+            last_entry = entries[-1].strip() if entries and entries[0] else ""
+            lines = last_entry.split('\n')
+            title = next((line.replace('Title: ', '') for line in lines if line.startswith('Title: ')), "N/A")
+            content = next((line.replace('Content: ', '') for line in lines if line.startswith('Content: ')), "No entries found")
     except FileNotFoundError:
-        latest = "No entries found."
+        title = "N/A"
+        content = "Journal file not found"
 
-    return latest.encode('utf-8')
+    title_bytes = title.encode('utf-8')
+    content_bytes = content.encode('utf-8')
+    body = struct.pack(f'!H{len(title_bytes)}sH{len(content_bytes)}s',
+                       len(title_bytes), title_bytes,
+                       len(content_bytes), content_bytes)
+    header = struct.pack('!HHH', 1, 4, len(body))
+    return header + body
 
 def main():
-    # Create UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('0.0.0.0', PORT))
-
-    print("Server listening on port", PORT)
+    print(f"Server is listening on port {PORT}...")
 
     while True:
-        # Wait for data from client
         data, addr = sock.recvfrom(2048)
+        if len(data) < 6:
+            continue
 
-        # Parse header
-        header = struct.unpack('!HHH', data[:6])
-        version, op_code, length = header
+        version, op_code, length = struct.unpack('!HHH', data[:6])
+        print(f"Received packet from {addr} with OpCode {op_code}")
 
-        # Handle based on opcode
-        if op_code == OPCODE_UPLOAD:
-            body = data[6:]
-            response = handle_upload(body)
-            sock.sendto(response, addr)
+        if op_code == 1:
+            response = handle_upload(data[6:])
+        elif op_code == 3:
+            response = handle_get_latest()
+        else:
+            print("Unknown OpCode")
+            continue
 
-        elif op_code == OPCODE_GET_LATEST:
-            latest_entry = handle_get_latest()
-            sock.sendto(latest_entry, addr)
+        sock.sendto(response, addr)
 
 if __name__ == '__main__':
     main()
